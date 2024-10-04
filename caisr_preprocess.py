@@ -1,7 +1,7 @@
 import sys, os, argparse
 import pandas as pd
 from os.path import expanduser
-
+import time
 
 sys.path.append('./preprocess/')
 from prepare_data import process_file, process_files
@@ -29,6 +29,22 @@ Note: The function is designed to work with the MGH BDSP dataset.
     - Save the processed data to a HDF5 file.
 """
 
+def timer(tag: str) -> None:
+    """
+    Displays a simple progress bar for the given tag, printing dots incrementally for aesthetics.
+    
+    Args:
+    - tag (str): The string label for which the progress bar is shown.
+    """
+
+    print(tag)
+    # simple progress bar for aesthetics
+    for i in range(1, len(tag) + 1):
+        print('.' * i + '     ', end='\r')
+        time.sleep(1.5 / len(tag))  # Time delay proportional to the length of the tag
+    print()
+
+
 def extract_run_parameters(param_csv: str):
     assert os.path.exists(param_csv), 'run parameter file is not found.'
     
@@ -53,9 +69,11 @@ if __name__ == "__main__":
     path_dir_output = args.path_dir_output
     verbose = args.verbose
 
+    timer('* Starting "caisr_preprocess" (created by Wolfgang Ganglberger, PhD)')
+
     # Extract run parameters
     autoscale_signals, overwrite = extract_run_parameters(path_dir_output + 'run_parameters/preprocess.csv')
 
     # Process the files
     process_files(path_dir_input, path_dir_output, autoscale_signals=autoscale_signals, overwrite=overwrite, verbose=verbose)
-
+    timer('* Finishing "caisr_preprocess"')
