@@ -10,6 +10,13 @@ from eeg_fct import filter_data, notch_filter, eeg_filter, spectrogram
 sys.path.append('./preprocess/')
 from prepare_data import compute_hr_from_ecg
 
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.figure import Figure
+from typing import Optional, Dict
+from datetime import datetime
+
+
 """ Sleep Report Generation Functions
 
 `combine_caisr_outputs(study_id, path_model_outputs)` combines the outputs from multiple sleep analysis models, such as sleep staging, arousal detection, respiratory event detection, and limb movement detection. It consolidates the individual model predictions for a specific study ID into a unified data structure for further processing.
@@ -177,360 +184,602 @@ def combine_caisr_outputs(file_id, path_dir_caisr_output, combined_folder, task_
 
     return path_combined_csv
 
-def generate_sleep_report_pdf(df_caisr_annotations, df_signals, params, sleep_metrics=None, legend=True):
-    """Generate a sleep report in PDF format based on the combined output from different sleep analysis models.
-    
-    Args:
-        df_caisr_annotations (pd.DataFrame): DataFrame containing the combined output from sleep analysis models.
-        df_signals (pd.DataFrame): DataFrame file containing the signals data (e.g., EEG, ECG, respiratory signals) for visualization.
-        sleep_metrics (pd.DataFrame): DataFrame containing the computed sleep metrics for the study.
-    
-    Returns:
-        fig_sleep_report (matplotlib.figure.Figure): Matplotlib figure object containing the sleep report.
-    """
-    # Generate the sleep report using the combined output and signals data
-    # ...
+class SleepReportGenerator:
+    def __init__(
+        self,
+        df_caisr_annotations: pd.DataFrame,
+        df_signals: pd.DataFrame,
+        params: Dict,
+        sleep_metrics: Optional[pd.DataFrame] = None,
+        legend: bool = True
+    ):
+        """
+        Initialize the SleepReportGenerator with necessary data.
 
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LinearSegmentedColormap
+        Args:
+            df_caisr_annotations (pd.DataFrame): Combined output from sleep analysis models.
+            df_signals (pd.DataFrame): Signals data for visualization.
+            params (Dict): Parameters including sampling frequencies and start time.
+            sleep_metrics (Optional[pd.DataFrame]): Computed sleep metrics.
+            legend (bool): Flag to include legend in the report.
+        """
+        self.df_caisr_annotations = df_caisr_annotations.copy()
+        self.df_signals = df_signals.copy()
+        self.params = params
+        self.sleep_metrics = sleep_metrics
+        self.legend = legend
 
-    plt.rcParams['xtick.major.size'] = 1
-    plt.rcParams['ytick.major.size'] = 2
-    fs_signals = params['fs_signals']
-    fs_annotations = params['fs_annotations']
+        # Validate required columns in df_caisr_annotations
+        required_columns_annotations = ['stage', 'resp', 'arousal', 'limb']
+        missing_annotations = [col for col in required_columns_annotations if col not in self.df_caisr_annotations.columns]
+        if missing_annotations:
+            raise ValueError(f"Missing columns in df_caisr_annotations: {missing_annotations}")
 
-    if 'position' in df_signals.columns:
-        n_rows = 9
-        height_ratios = [4, 4, 0.3, 1.5, 0.3, 2, 2, 1, 0.3]
-    else:
-        n_rows = 8
-        height_ratios = [4, 4, 0.3, 1.5, 2, 2, 1, 0.3]
-    
-    # Events during Wake are not considered:
-    sleep = np.isin(df_caisr_annotations['stage'].values.astype(float), [1, 2, 3, 4])
-    df_caisr_annotations['resp'][~sleep] = 0
-    df_caisr_annotations['arousal'][~sleep] = 0
-    df_caisr_annotations['limb'][~sleep] = 0
-    
-    fig, ax = plt.subplots(n_rows, 1, figsize=(11, 9),
-                           gridspec_kw={'height_ratios': height_ratios},
-                           sharex=True)
+        # Validate required columns in df_signals
+        required_columns_signals = ['spo2', 'hr', 'chin1-chin2', 'lat', 'rat']
+        if 'position' in self.df_signals.columns:
+            required_columns_signals.append('position')
+        missing_signals = [col for col in required_columns_signals if col not in self.df_signals.columns]
+        if missing_signals:
+            raise ValueError(f"Missing columns in df_signals: {missing_signals}")
 
-    x_hours = np.arange(0, len(df_signals) / fs_signals * 2) / 3600 / 2 # 2 Hz
+        # Extract sampling frequencies
+        self.fs_signals = self.params.get('fs_signals')
+        self.fs_annotations = self.params.get('fs_annotations')
+        if self.fs_signals is None or self.fs_annotations is None:
+            raise ValueError("Parameters 'fs_signals' and 'fs_annotations' must be provided in params.")
 
-    ###### EEG spectrogram
-    i = 0
-    ch = 'c4-m1'
-    eeg = df_signals[ch].values.copy().astype(float)[np.newaxis, :]
-    eeg = eeg_filter(eeg, fs_signals)
-    eeg = eeg * 1e6  # convert to microvolts
-    specs, freq, eeg_segs = spectrogram(eeg, fs_signals, signaltype='eeg', epoch_time=2, epoch_step_time=1, bandwidth=2, fmin=0, fmax=20)
-    specs = specs.squeeze().T
+        # Determine the number of rows and height ratios based on 'position' column
+        if 'position' in self.df_signals.columns:
+            self.n_rows = 9
+            self.height_ratios = [4, 4, 0.6, 1.5, 0.3, 2, 2, 1, 0.3]
+        else:
+            self.n_rows = 8
+            self.height_ratios = [4, 4, 0.6, 1.5, 2, 2, 1, 0.3]
 
-    spec_db_vmin = 0
-    spec_db_vmax = 20
-    im = ax[i].imshow(specs, cmap='turbo', origin='lower', aspect='auto',
-                      vmin=spec_db_vmin, vmax=spec_db_vmax,
-                      extent=(0, x_hours[-1], freq.min(), freq.max()))
-    ax[i].set_ylabel(f'EEG {ch.upper()}')
-    ax[i].set_xticklabels([])
+        # Initialize the figure and axes
+        self.fig, self.ax = plt.subplots(
+            self.n_rows, 1, figsize=(11, 9),
+            gridspec_kw={'height_ratios': self.height_ratios},
+            sharex=True
+        )
 
-    ####### hypnogram
-    i = 1
-    hypnogram_stages = df_caisr_annotations['stage'].values.astype(float)
-    hypnogram_stages[hypnogram_stages == 9] = np.nan
-    hypnogram_resp = df_caisr_annotations['resp'].values.astype(float)
-    arousal = df_caisr_annotations['arousal'].values.copy().astype(float)
-    arousal[arousal != 1] = np.nan
-    arousal[arousal == 1] = 5.25
-    ax[i].plot(x_hours, hypnogram_stages, c='k')
-    rem_only = hypnogram_stages.copy()
-    rem_only[rem_only != 4] = np.nan
-    ax[i].plot(x_hours, rem_only, c='r')
-    ax[i].plot(x_hours, arousal, c='orange', alpha=1, lw=3)
-    ax[i].set_yticks([1, 2, 3, 4, 5])
-    ax[i].set_yticklabels(['N3', 'N2', 'N1', 'R', 'W'])
+        # Time axis in hours
+        self.x_hours = np.arange(0, len(self.df_signals) / self.fs_signals * 2) / 3600 / 2  # 2 Hz
 
-    ax2 = ax[i].twinx()
-    ax2.tick_params(axis='y', labelcolor='blue')
-    ax2.plot(x_hours, hypnogram_resp, c='blue', alpha=0.3, lw=0.4)
-    ax2.set_yticks([0, 1, 2, 3, 4, 5])
-    ax2.set_yticklabels(['', 'OA', 'CA', 'MA', 'HY', 'RA'])
+        # Preprocess annotations
+        self._preprocess_annotations()
 
-    ax[i].set_ylim([0.9, 5.5])
-    ax2.set_ylim([0, 5.5])
-    ax[i].set_xlim([0, x_hours[-1]])
-    ax[i].set_xticklabels([])
-    ax[i].set_ylabel('Hypnogram')
+    def _preprocess_annotations(self):
+        """Preprocess annotations by masking non-sleep stages."""
+        sleep_stages = [1, 2, 3, 4]
+        sleep_mask = np.isin(
+            self.df_caisr_annotations['stage'].values.astype(float),
+            sleep_stages
+        )
+        for column in ['resp', 'arousal', 'limb']:
+            self.df_caisr_annotations[column].values[~sleep_mask] = 0
 
-    ###### respiratory events
-    i = 2
-    palette_resp = ['magenta', 'green', 'cyan', 'blue', 'orangered', 'white']
+    def generate_figure(self) -> Figure:
+        """Generate the complete sleep report figure."""
+        # Plot components with fixed subplot indices
+        self._plot_eeg_spectrogram()
 
-    def resp_to_resp_df(resp, value_rera=5):
-        resp_df = pd.DataFrame(columns=['Hypopnea', 'Central', 'Mixed', 'Obstructive', 'RERA', 'No Event'], index=range(len(resp)))
-        resp_df[:] = 0
+        self._plot_hypnogram()
+
+        self._plot_respiratory_events()
+
+        self._plot_spo2()
+
+        if 'position' in self.df_signals.columns:
+            self._plot_position(4)
+            self._plot_heart_rate(5)
+            self._plot_chin_emg(6)
+            self._plot_leg_emg(7)
+            self._plot_limb_annotations(8)
+        else:
+            self._plot_heart_rate(4)
+            self._plot_chin_emg(5)
+            self._plot_leg_emg(6)
+            self._plot_limb_annotations(7)
+
+        self._configure_axes_labels()
+        self._add_legend()
+        self._add_sleep_metrics()
+
+        plt.tight_layout()
+        plt.subplots_adjust(hspace=0.05, bottom=0.32)
+
+        return self.fig
+
+    def _plot_eeg_spectrogram(self):
+        """Plot the EEG spectrogram."""
+        i = 0
+        ch = 'c4-m1'
+        eeg = self.df_signals[ch].values.astype(float)[np.newaxis, :]
+        eeg = eeg_filter(eeg, self.fs_signals)
+        eeg = eeg * 1e6  # Convert to microvolts
+
+        specs, freq, eeg_segs = spectrogram(
+            eeg,
+            self.fs_signals,
+            signaltype='eeg',
+            epoch_time=2,
+            epoch_step_time=1,
+            bandwidth=2,
+            fmin=0,
+            fmax=20
+        )
+        specs = specs.squeeze().T
+
+        im = self.ax[i].imshow(
+            specs,
+            cmap='turbo',
+            origin='lower',
+            aspect='auto',
+            vmin=0,
+            vmax=20,
+            extent=(0, self.x_hours[-1], freq.min(), freq.max())
+        )
+        self.ax[i].set_ylabel(f'EEG {ch.upper()}')
+        self.ax[i].set_xticklabels([])
+
+    def _plot_hypnogram(self):
+        """Plot the hypnogram with arousals and respiration events."""
+        i = 1
+        hypnogram_stages = self.df_caisr_annotations['stage'].values.astype(float)
+        hypnogram_stages[hypnogram_stages == 9] = np.nan
+
+        hypnogram_resp = self.df_caisr_annotations['resp'].values.astype(float)
+        arousal = self.df_caisr_annotations['arousal'].values.astype(float)
+        arousal = np.where(arousal == 1, 5.25, np.nan)
+
+        self.ax[i].plot(self.x_hours, hypnogram_stages, color='k', label='Stage')
+        rem_only = np.where(hypnogram_stages == 4, hypnogram_stages, np.nan)
+        self.ax[i].plot(self.x_hours, rem_only, color='r', label='REM')
+        self.ax[i].plot(self.x_hours, arousal, color='orange', alpha=1, lw=3, label='Arousal')
+
+        self.ax[i].set_yticks([1, 2, 3, 4, 5])
+        self.ax[i].set_yticklabels(['N3', 'N2', 'N1', 'R', 'W'])
+
+        ax2 = self.ax[i].twinx()
+        ax2.plot(self.x_hours, hypnogram_resp, color='blue', alpha=0.3, lw=0.4, label='Respiration')
+        ax2.set_yticks([0, 1, 2, 3, 4, 5])
+        ax2.set_yticklabels(['', 'OA', 'CA', 'MA', 'HY', 'RA'])
+        ax2.tick_params(axis='y', labelcolor='blue')
+
+        self.ax[i].set_ylim([0.9, 5.5])
+        ax2.set_ylim([0, 5.5])
+        self.ax[i].set_xlim([0, self.x_hours[-1]])
+        self.ax[i].set_xticklabels([])
+        self.ax[i].set_ylabel('Hypnogram')
+
+    def _plot_respiratory_events(self):
+        """Plot respiratory events as stacked area chart."""
+        i = 2
+        palette_resp = ['magenta', 'green', 'cyan', 'blue', 'orangered', 'white']
+
+        df_resp = self._resp_to_resp_df(self.df_caisr_annotations['resp'].values[::self.fs_annotations])
+        df_resp.iloc[:, :-1] = df_resp.iloc[:, :-1].rolling(window=90, min_periods=1, center=True).max()
+        df_resp.iloc[df_resp.iloc[:, :-1].sum(axis=1) > 0, -1] = 0
+        df_resp = df_resp.divide(df_resp.sum(axis=1).values, axis=0)  # Normalization
+
+        df_resp.index = np.linspace(0, self.x_hours[-1], len(df_resp))
+        df_resp.plot(
+            kind='area',
+            color=palette_resp,
+            alpha=1,
+            ax=self.ax[i],
+            stacked=True,
+            lw=0,
+            legend=False
+        )
+        self.ax[i].set_xlim(0, self.x_hours[-1])
+        self.ax[i].set_ylim(0, 1)
+        self.ax[i].set_yticks([])
+
+    def _plot_spo2(self):
+        """Plot SpO2 levels with quantile shading."""
+        i = 3
+        spo2_values = self.df_signals['spo2'].values
+        spo2_values = spo2_values[::self.fs_signals // self.fs_annotations]
+        spo2_values[spo2_values < 40] = np.nan
+
+        window_size = int(10 * self.fs_signals)
+        spo2_q50 = pd.Series(spo2_values).rolling(window=window_size, min_periods=1, center=True).mean()
+        spo2_q10 = pd.Series(spo2_values).rolling(window=window_size, min_periods=1, center=True).quantile(0.025)
+        spo2_q90 = pd.Series(spo2_values).rolling(window=window_size, min_periods=1, center=True).quantile(0.975)
+
+        self.ax[i].plot(self.x_hours, spo2_q50, color='darkblue', lw=0.5, label='SpO2 Median')
+        self.ax[i].fill_between(self.x_hours, spo2_q10, spo2_q90, color='cornflowerblue', alpha=0.4, label='SpO2 2.5-97.5%')
+        
+        # Determine the lower y-limit
+        if np.nanquantile(spo2_values, 0.1) > 80:
+            ylim = 80
+        else:
+            ylim = spo2_q10.min()
+        self.ax[i].set_ylim([ylim, 100])
+        self.ax[i].set_xlim(0, self.x_hours[-1])
+        self.ax[i].set_ylabel('SpO2')
+
+    def _plot_position(self, row: int):
+        """Plot body position if available."""
+        cm_position = ['white', 'black', 'blue', 'green', 'red', 'gray', 'white']
+        cm_position = LinearSegmentedColormap.from_list("cm_position", cm_position)
+
+        position = self.df_signals['position'].values.astype(float)
+        self.ax[row].imshow(
+            position[np.newaxis, :],
+            cmap=cm_position,
+            origin='lower',
+            aspect='auto',
+            vmin=0,
+            vmax=6,
+            extent=(0, self.x_hours[-1], 0, 1)
+        )
+        self.ax[row].set_ylabel('Pos')
+        self.ax[row].yaxis.set_label_position("right")
+        self.ax[row].set_yticks([])
+
+    def _plot_heart_rate(self, row: int):
+        """Plot heart rate with quantile shading."""
+        hr_values = self.df_signals['hr'].values
+        hr_values[hr_values < 30] = np.nan
+        self.df_signals.loc[self.df_signals['hr'] < 30, 'hr'] = np.nan
+
+        window_size = int(30 * self.fs_signals)
+        hr_q50 = self.df_signals['hr'].rolling(window=window_size, min_periods=1, center=True).mean()
+        hr_q10 = self.df_signals['hr'].rolling(window=window_size, min_periods=1, center=True).quantile(0.025)
+        hr_q90 = self.df_signals['hr'].rolling(window=window_size, min_periods=1, center=True).quantile(0.975)
+
+        self.ax[row].plot(
+            self.x_hours[::2],
+            hr_q50[::self.fs_signals],
+            color='darkred',
+            lw=0.5,
+            label='HR Median'
+        )
+        self.ax[row].fill_between(
+            self.x_hours[::2],
+            hr_q10[::self.fs_signals],
+            hr_q90[::self.fs_signals],
+            color='salmon',
+            alpha=0.4,
+            label='HR 2.5-97.5%'
+        )
+
+        hr_ylim_min = max(20, np.nanquantile(hr_values, 0.01))
+        hr_ylim_max = min(120, np.nanquantile(hr_values, 0.99))
+        self.ax[row].set_ylim([hr_ylim_min, hr_ylim_max])
+        self.ax[row].set_xlim([0, self.x_hours[-1]])
+        self.ax[row].set_ylabel('HR')
+
+    def _plot_chin_emg(self, row: int):
+        """Plot Chin EMG signal with quantile shading."""
+        chin = self.df_signals['chin1-chin2'].values * 1e6  # Convert to microvolts
+        rolling_duration = int(0.1 * self.fs_signals)
+        chin_q50 = pd.Series(chin).rolling(window=rolling_duration, min_periods=1, center=True).mean()
+        chin_q10 = pd.Series(chin).rolling(window=rolling_duration, min_periods=1, center=True).quantile(0.025)
+        chin_q90 = pd.Series(chin).rolling(window=rolling_duration, min_periods=1, center=True).quantile(0.975)
+
+        self.ax[row].plot(
+            self.x_hours,
+            chin[::self.fs_signals // self.fs_annotations],
+            color='saddlebrown',
+            lw=0.4,
+            label='Chin EMG'
+        )
+        self.ax[row].set_ylim(
+            np.nanquantile(chin, 0.001),
+            np.nanquantile(chin, 0.999)
+        )
+        self.ax[row].set_xlim(0, self.x_hours[-1])
+        self.ax[row].set_ylabel('Chin')
+
+        # Remove any negative tick labels
+        yticklabels = [str(int(x)) if int(x) >= 0 else '' for x in self.ax[row].get_yticks()]
+        self.ax[row].set_yticklabels(yticklabels)
+
+    def _plot_leg_emg(self, row: int):
+        """Plot Leg EMG signal."""
+        leg = (self.df_signals['lat'].values + self.df_signals['rat'].values) / 2
+        leg = leg * 1e6  # Convert to microvolts
+
+        self.ax[row].plot(
+            self.x_hours,
+            leg[::self.fs_signals // self.fs_annotations],
+            color='darkgreen',
+            lw=0.4,
+            label='Leg EMG'
+        )
+        self.ax[row].set_ylim(
+            min(-250, np.nanquantile(leg, 0.001)),
+            max(250, np.nanquantile(leg, 0.999))
+        )
+        self.ax[row].set_xlim(0, self.x_hours[-1])
+        self.ax[row].set_ylabel('Leg')
+
+        # Remove any negative tick labels
+        yticklabels = [str(int(x)) if int(x) >= 0 else '' for x in self.ax[row].get_yticks()]
+        self.ax[row].set_yticklabels(yticklabels)
+
+    def _plot_limb_annotations(self, row: int):
+        """Plot limb movement annotations as stacked area chart."""
+        palette_limb = ['black', 'red', 'white']
+        df_limb = self._limb_to_limb_df(self.df_caisr_annotations['limb'].values[::self.fs_annotations])
+
+        df_limb.iloc[:, :-1] = df_limb.iloc[:, :-1].rolling(window=30, min_periods=1, center=True).max()
+        df_limb.iloc[df_limb.iloc[:, :-1].sum(axis=1) > 0, -1] = 0
+        df_limb = df_limb.divide(df_limb.sum(axis=1).values, axis=0)
+        df_limb.index = np.linspace(0, self.x_hours[-1], len(df_limb))
+
+        df_limb.plot(
+            kind='area',
+            color=palette_limb,
+            alpha=1,
+            ax=self.ax[row],
+            stacked=True,
+            lw=0,
+            legend=False
+        )
+        self.ax[row].set_xlim(0, self.x_hours[-1])
+        self.ax[row].set_ylim(0, 1)
+        self.ax[row].set_yticks([])
+
+    def _configure_axes_labels(self):
+        """Configure the x-axis labels and ticks."""
+        self.ax[-1].set_xlabel('Time (hours)', labelpad=0.1)
+        self.ax[-1].set_xticks(range(int(self.x_hours[-1]) + 1))
+        self.ax[-1].set_xticklabels([str(int(x)) for x in self.ax[-1].get_xticks()])
+
+        # Optional: Add time of day to the x-axis
+        # Uncomment the following block if needed
+        """
+        if 'start_time' in self.params:
+            start_time: datetime = self.params['start_time']
+            hour = start_time.hour
+            minute = start_time.minute
+            x_time = [
+                f"{(hour + int(x)) % 24:02d}:{minute:02d}"
+                for x in range(int(self.x_hours[-1]) + 1)
+            ]
+            self.ax[-1].set_xticklabels(x_time)
+        """
+
+        self.ax[-1].tick_params(length=2)
+        self.fig.align_ylabels(self.ax)
+
+    def _add_legend(self):
+        """Add a custom legend to the figure."""
+        if not self.legend:
+            return
+
+        fontsize_legend = 8
+        axe_legend = self.fig.add_axes([0.05, 0.17, 0.9, 0.1])
+        axe_legend.text(0, 1, 'Events:', fontsize=fontsize_legend, va='top')
+
+        # Define legend items
+        legend_items = [
+            {'x': 0.15, 'y': 0.88, 'color': 'orange', 'label': 'Arousal'},
+            {'x': 0.37, 'y': 0.88, 'color': 'blue', 'label': 'Obstructive apnea (OA)'},
+            {'x': 0.64, 'y': 0.88, 'color': 'green', 'label': 'Central apnea (CA)'},
+            {'x': 0.15, 'y': 0.66, 'color': 'cyan', 'label': 'Mixed apnea (MA)'},
+            {'x': 0.37, 'y': 0.66, 'color': 'magenta', 'label': 'Hypopnea (HY)'},
+            {'x': 0.64, 'y': 0.66, 'color': 'red', 'label': 'Respiratory related arousal (RA)'},
+            {'x': 0.88, 'y': 0.88, 'color': 'black', 'label': 'Limb movement'}
+        ]
+
+        # Plot legend items
+        for item in legend_items:
+            axe_legend.scatter([item['x']], [item['y']], c=item['color'], marker='s', alpha=1, lw=3)
+            axe_legend.text(
+                item['x'] + 0.02,
+                item['y'] - 0.01,
+                item['label'],
+                fontsize=fontsize_legend,
+                va='center'
+            )
+
+        # Body Position Legend
+        if 'position' in self.df_signals.columns:
+            position_items = [
+                {'x': 0.15, 'y': 0.36, 'color': 'black', 'label': 'Supine'},
+                {'x': 0.37, 'y': 0.36, 'color': 'blue', 'label': 'Lateral left'},
+                {'x': 0.64, 'y': 0.36, 'color': 'green', 'label': 'Lateral right'},
+                {'x': 0.82, 'y': 0.36, 'color': 'red', 'label': 'Prone'},
+                {'x': 0.94, 'y': 0.36, 'color': 'gray', 'label': 'Upright'}
+            ]
+            axe_legend.text(0, 0.5, 'Body Position:', fontsize=fontsize_legend, va='top')
+            for item in position_items:
+                axe_legend.scatter([item['x']], [item['y']], c=item['color'], marker='s', alpha=1, lw=3)
+                axe_legend.text(
+                    item['x'] + 0.02,
+                    item['y'] - 0.01,
+                    item['label'],
+                    fontsize=fontsize_legend,
+                    va='center'
+                )
+
+        # Finalize legend
+        axe_legend.set_xlim(0, 1)
+        axe_legend.set_ylim(0, 1)
+        axe_legend.axis('off')
+
+    def _add_sleep_metrics(self):
+        """Add sleep metrics text to the figure."""
+        if self.sleep_metrics is None:
+            return
+
+        metric_labels = {
+            'hours_sleep': 'TST (h)',
+            'hours_psg': 'Recording (h)',
+            'sleep_efficiency': 'Eff (%)',
+            'perc_r': 'REM (%)',
+            'perc_n1': 'N1 (%)',
+            'perc_n2': 'N2 (%)',
+            'perc_n3': 'N3 (%)',
+            'waso': 'WASO (min)',
+            'sleep_latency': 'SL (min)',
+            'sfi': 'SFI',
+            'arousal_index': 'Arousal I.',
+            'lmi': 'LMI',
+            'ahi': 'AHI',
+            'ahi_nrem': 'AHI NREM',
+            'ahi_rem': 'AHI REM',
+            'rdi': 'RDI',
+            'oai': 'OAI',
+            'cai': 'CAI',
+            'mai': 'MAI',
+            'hyi': 'HYI',
+            'rerai': 'RERAI',
+        }
+
+        fontsize_statistics = 12
+        line_height = 0.025
+
+        for i, (key, label) in enumerate(metric_labels.items()):
+            if key not in self.sleep_metrics.columns:
+                continue  # Skip if the key is not in sleep_metrics
+
+            value = self.sleep_metrics[key].item()
+            if ' (%)' in label or 'Eff (%)' in label:
+                value *= 100
+            decimals = 1 if key in ['hours_sleep', 'hours_psg', 'sfi'] else 0
+            value = np.round(value, decimals)
+            x_position = 0.1 + 0.30 * (i % 3)
+            y_position = 0.17 - line_height * (i // 3)
+            self.fig.text(
+                x_position,
+                y_position,
+                f"{label:<13} {value:.{decimals}f}",
+                fontsize=fontsize_statistics,
+                va='center',
+                ha='left',
+                family='monospace'
+            )
+
+    @staticmethod
+    def _resp_to_resp_df(resp: np.ndarray, value_rera: int = 5) -> pd.DataFrame:
+        """Convert respiratory events to a DataFrame for plotting.
+
+        Args:
+            resp (np.ndarray): Respiratory event annotations.
+            value_rera (int): Value representing RERA events.
+
+        Returns:
+            pd.DataFrame: DataFrame with binary columns for each event type.
+        """
+        columns = ['Hypopnea', 'Central', 'Mixed', 'Obstructive', 'RERA', 'No Event']
+        resp_df = pd.DataFrame(0, index=np.arange(len(resp)), columns=columns)
+
         resp_df.loc[resp == 0, 'No Event'] = 1
         resp_df.loc[resp == 1, 'Obstructive'] = 1
         resp_df.loc[resp == 2, 'Central'] = 1
         resp_df.loc[resp == 3, 'Mixed'] = 1
         resp_df.loc[resp == 4, 'Hypopnea'] = 1
         resp_df.loc[resp == value_rera, 'RERA'] = 1
+
         return resp_df
 
-    df_resp = resp_to_resp_df(hypnogram_resp[::fs_annotations])
-    df_resp.iloc[:, :-1] = df_resp.iloc[:, :-1].rolling(window=60, min_periods=1, axis=0, center=True).max()
-    df_resp.iloc[df_resp.iloc[:, :-1].sum(axis=1) > 0, -1] = 0
-    df_resp = df_resp.divide(df_resp.sum(axis=1).values, axis=0)  # normalization
+    @staticmethod
+    def _limb_to_limb_df(limb: np.ndarray) -> pd.DataFrame:
+        """Convert limb movement annotations to a DataFrame for plotting.
 
-    df_resp.index = np.linspace(0, x_hours[-1], len(df_resp))
-    df_resp.plot(kind='area', color=palette_resp, alpha=1, sharex=True, ax=ax[i],
-                 stacked=True, lw=0, legend=False)
-    ax[i].set_xlim(0, x_hours[-1])
-    ax[i].set_ylim(0, 1)
-    ax[i].set_yticks([])
+        Args:
+            limb (np.ndarray): Limb movement annotations.
 
-    # SpO2
-    i = 3
-    spo2_values = df_signals['spo2'].values
-    spo2_values = spo2_values[::fs_signals // fs_annotations]
-    spo2_values[spo2_values < 40] = np.nan
-    spo2_q50 = pd.Series(spo2_values).rolling(int(10 * fs_signals), min_periods=1, center=True).mean()
-    spo2_q10 = pd.Series(spo2_values).rolling(int(10 * fs_signals), min_periods=1, center=True).quantile(0.025)
-    spo2_q90 = pd.Series(spo2_values).rolling(int(10 * fs_signals), min_periods=1, center=True).quantile(0.975)
+        Returns:
+            pd.DataFrame: DataFrame with binary columns for each limb movement type.
+        """
+        columns = ['Isolated', 'Periodic', 'No Event']
+        limb_df = pd.DataFrame(0, index=np.arange(len(limb)), columns=columns)
 
-    ax[i].plot(x_hours, spo2_q50, c='darkblue', lw=0.5)
-    ax[i].fill_between(x_hours, spo2_q10, spo2_q90, color='cornflowerblue', alpha=0.4)
-    ylim = 80 if np.nanquantile(spo2_values, 0.1) > 80 else spo2_q10
-    ax[i].set_ylim([ylim, 100])
-    ax[i].set_xlim(0, x_hours[-1])
-    ax[i].set_ylabel('SpO2')
+        limb_df.loc[limb == 0, 'No Event'] = 1
+        limb_df.loc[np.isin(limb, [1, 3, 4]), 'Isolated'] = 1
+        limb_df.loc[limb == 2, 'Periodic'] = 1
 
-    # Position
-    
-    if 'position' in df_signals.columns:
-        i += 1
-        cm_position = ['white', 'black', 'blue', 'green', 'red', 'gray', 'white']
-        cm_position = LinearSegmentedColormap.from_list("cm_reds", cm_position)
+        return limb_df
 
-        position = df_signals['position'].values.copy().astype(float)
 
-        ax[i].imshow(df_signals['position'].values[np.newaxis, :], cmap=cm_position, origin='lower', aspect='auto',
-                    vmin=0, vmax=6,
-                    extent=(0, x_hours[-1], 0, 1))
-        ax[i].set_ylabel('Pos')
-        ax[i].yaxis.set_label_position("right")
-        ax[i].set_yticks([])
+def generate_sleep_report_pdf(
+    df_caisr_annotations: pd.DataFrame,
+    df_signals: pd.DataFrame,
+    params: Dict,
+    sleep_metrics: Optional[pd.DataFrame] = None,
+    legend: bool = True
+) -> Figure:
+    """
+    Generate a sleep report in PDF format based on the combined output from different sleep analysis models.
 
-    # Heart rate
-    i += 1
-    hr_values = df_signals['hr'].values
-    hr_values[hr_values < 30] = np.nan
-    df_signals.loc[hr_values < 30, 'hr'] = np.nan
-    hr_q50 = df_signals['hr'].rolling(int(30 * fs_signals), min_periods=1, center=True).mean()
-    hr_q10 = df_signals['hr'].rolling(int(30 * fs_signals), min_periods=1, center=True).quantile(0.025)
-    hr_q90 = df_signals['hr'].rolling(int(30 * fs_signals), min_periods=1, center=True).quantile(0.975)
+    Args:
+        df_caisr_annotations (pd.DataFrame): Combined output from sleep analysis models.
+        df_signals (pd.DataFrame): Signals data for visualization.
+        params (Dict): Parameters including sampling frequencies and start time.
+        sleep_metrics (Optional[pd.DataFrame]): Computed sleep metrics.
+        legend (bool): Flag to include legend in the report.
 
-    ax[i].plot(x_hours[::2], hr_q50[::fs_signals], c='darkred', lw=0.5)
-    ax[i].fill_between(x_hours[::2], hr_q10[::fs_signals], hr_q90[::fs_signals], color='salmon', alpha=0.4)
-    hr_ylim_min = max(20, np.nanquantile(hr_values, 0.01))
-    hr_ylim_max = min(120, np.nanquantile(hr_values, 0.99))
-    ax[i].set_ylim([hr_ylim_min, hr_ylim_max])
-    ax[i].set_xlim(0, x_hours[-1])
-    ax[i].set_ylabel('HR')
-    
-    # Chin EMG
-    i += 1
-    chin = df_signals['chin1-chin2'].values
-    chin = chin * 1e6  # convert to microvolts
-    rolling_duration = int(0.1 * fs_signals)
-    chin_q50 = pd.Series(chin).rolling(rolling_duration, min_periods=1, center=True).mean()
-    chin_q10 = pd.Series(chin).rolling(rolling_duration, min_periods=1, center=True).quantile(0.025)
-    chin_q90 = pd.Series(chin).rolling(rolling_duration, min_periods=1, center=True).quantile(0.975)
-    ax[i].plot(x_hours, chin[::fs_signals // fs_annotations], c='saddlebrown', lw=0.4)
-    ax[i].set_ylim(np.nanquantile(chin, 0.001), np.nanquantile(chin, 0.999))
-    ax[i].set_xlim(0, x_hours[-1])
-    ax[i].set_ylabel('Chin')
-    # remove any negative tick labels:
-    yticklabels = [str(int(x)) if int(x) >= 0 else '' for x in ax[i].get_yticks()]
-    ax[i].set_yticklabels(yticklabels)
+    Returns:
+        Figure: Matplotlib figure object containing the sleep report.
+    """
+    generator = SleepReportGenerator(
+        df_caisr_annotations=df_caisr_annotations,
+        df_signals=df_signals,
+        params=params,
+        sleep_metrics=sleep_metrics,
+        legend=legend
+    )
+    fig_sleep_report = generator.generate_figure()
+    return fig_sleep_report
 
-    # Leg EMG
-    i += 1
-    leg = (df_signals['lat'].values + df_signals['rat'].values) / 2
-    leg = leg * 1e6  # convert to microvolts
-    ax[i].plot(x_hours, leg[::fs_signals//fs_annotations], c='darkgreen', lw=0.4)
-    ax[i].set_ylim(min(-250, np.nanquantile(leg, 0.001)), max(250, np.nanquantile(leg, 0.999)))
-    ax[i].set_xlim(0, x_hours[-1])
-    ax[i].set_ylabel('Leg') #  \nMoves')
-    # ax[i].yaxis.set_label_position("right")
-    yticklabels = [str(int(x)) if int(x) >= 0 else '' for x in ax[i].get_yticks()]
-    ax[i].set_yticklabels(yticklabels)
-    
-    # Limb annotations
-    i += 1
-    palette_limb = ['black', 'red', 'white']
 
-    def limb_to_limb_df(limb):
-        df = pd.DataFrame(columns=['Isolated', 'Periodic', 'No Event'], index=range(len(limb)))
-        df[:] = 0
-        df.loc[limb == 0, 'No Event'] = 1
-        df.loc[limb == 1, 'Isolated'] = 1
-        df.loc[limb == 3, 'Isolated'] = 1
-        df.loc[limb == 4, 'Isolated'] = 1
-        df.loc[limb == 2, 'Periodic'] = 1
-        return df
+def generate_sleep_report_pdf(
+    df_caisr_annotations: pd.DataFrame,
+    df_signals: pd.DataFrame,
+    params: Dict,
+    sleep_metrics: Optional[pd.DataFrame] = None,
+    legend: bool = True
+) -> Figure:
+    """
+    Generate a sleep report in PDF format based on the combined output from different sleep analysis models.
 
-    df_limb = limb_to_limb_df(df_caisr_annotations['limb'].values[::fs_annotations])
-    df_limb.iloc[:, :-1] = df_limb.iloc[:, :-1].rolling(window=30, min_periods=1, axis=0, center=True).max()
-    df_limb.iloc[df_limb.iloc[:, :-1].sum(axis=1) > 0, -1] = 0
-    df_limb = df_limb.divide(df_limb.sum(axis=1).values, axis=0)
-    df_limb.index = np.linspace(0, x_hours[-1], len(df_limb))
-    df_limb.plot(kind='area', color=palette_limb, alpha=1, sharex=True, ax=ax[i],
-                 stacked=True, lw=0, legend=False)
-    ax[i].set_xlim(0, x_hours[-1])
-    ax[i].set_ylim(0, 1)
-    ax[i].set_yticks([])
+    Args:
+        df_caisr_annotations (pd.DataFrame): Combined output from sleep analysis models.
+        df_signals (pd.DataFrame): Signals data for visualization.
+        params (Dict): Parameters including sampling frequencies and start time.
+        sleep_metrics (Optional[pd.DataFrame]): Computed sleep metrics.
+        legend (bool): Flag to include legend in the report.
 
-    ax[-1].set_xlabel('Time (hours)', labelpad=0.1)
-    ax[-1].set_xticks(range(int(x_hours[-1]) + 1))
-    ax[-1].set_xticklabels([str(int(x)) for x in ax[-1].get_xticks()])
-    
-    if 0:
-        # Add time of day to the x-axis
-        hour = params['start_time'].hour
-        minute = params['start_time'].minute
-        x_time = [str((hour + x) % 24).zfill(2) + ':' + str(minute).zfill(2) for x in range(int(x_hours[-1]) + 1)]
-        ax[-1].set_xticklabels(x_time)
+    Returns:
+        Figure: Matplotlib figure object containing the sleep report.
+    """
+    generator = SleepReportGenerator(
+        df_caisr_annotations=df_caisr_annotations,
+        df_signals=df_signals,
+        params=params,
+        sleep_metrics=sleep_metrics,
+        legend=legend
+    )
+    fig_sleep_report = generator.generate_figure()
+    return fig_sleep_report
 
-    ax[-1].tick_params(length=2)
 
-    # Legend
-    fig.align_ylabels(ax)
-    plt.tight_layout()
-    plt.subplots_adjust(hspace=0.05, bottom=0.16)
 
-    fontsize_legend = 8
-    axe_legend = fig.add_axes([0.05, 0.17, 0.9, 0.1])
-    axe_legend.text(0, 1, 'Events:', fontsize=fontsize_legend, va='top')
-    
-    # Add legend details (Arousal, Apnea types, etc.)
-    xpos = 0.15
-    ypos = 0.88
-    axe_legend.scatter([xpos], [ypos], c='orange', marker='s', alpha=1, lw=3)
-    axe_legend.text(xpos+0.02, ypos-0.01, 'Arousal', fontsize=fontsize_legend, va='center')    
-    
-    xpos = 0.37
-    axe_legend.scatter([xpos], [ypos], c='blue', marker='s', alpha=1, lw=3)
-    axe_legend.text(xpos+0.02, ypos-0.01, 'Obstructive apnea (OA)', fontsize=fontsize_legend, va='center')
-    
-    xpos = 0.64
-    axe_legend.scatter([xpos], [ypos], c='green', marker='s',alpha=1, lw=3)
-    axe_legend.text(xpos+0.02, ypos-0.01, 'Central apnea (CA)', fontsize=fontsize_legend, va='center')
-    
-    xpos = 0.15
-    ypos = ypos - 0.22
-    axe_legend.scatter([xpos], [ypos], c='cyan', marker='s',alpha=1, lw=3)
-    axe_legend.text(xpos+0.02, ypos-0.01, 'Mixed apnea (MA)', fontsize=fontsize_legend, va='center')
-    
-    xpos = 0.37
-    axe_legend.scatter([xpos], [ypos], c='magenta', marker='s',alpha=1, lw=3)
-    axe_legend.text(xpos+0.02, ypos-0.01, 'Hypopnea (HY)', fontsize=fontsize_legend, va='center')
-    
-    xpos = 0.64
-    axe_legend.scatter([xpos], [ypos], c='red', marker='s',alpha=1, lw=3)
-    axe_legend.text(xpos+0.02, ypos-0.01, 'Respiratory related arousal (RA)', fontsize=fontsize_legend, va='center')
-    
-    ypos = ypos - 0.22
-    xpos = 0.15
-    # black "Limb movement (LM)":
-    axe_legend.scatter([xpos], [ypos], c='black', marker='s', alpha=1, lw=3)
-    axe_legend.text(xpos+0.02, ypos-0.01, 'Limb movement', fontsize=fontsize_legend, va='center')
-    
-    if 'position' in df_signals.columns:
-        axe_legend.text(0, 0.5, 'Body Position:', fontsize=fontsize_legend, va='top')
-        xpos = 0.15
-        ypos = 0.36
-        axe_legend.scatter([xpos], [ypos], c='black', marker='s', alpha=1, lw=3)
-        axe_legend.text(xpos+0.02, ypos-0.01, 'Supine', fontsize=fontsize_legend, va='center')
-        
-        xpos = 0.37
-        axe_legend.scatter([xpos], [ypos], c='blue', marker='s', alpha=1, lw=3)
-        axe_legend.text(xpos+0.02, ypos-0.01, 'Lateral left', fontsize=fontsize_legend, va='center')
-        
-        xpos = 0.64
-        axe_legend.scatter([xpos], [ypos], c='green', marker='s', alpha=1, lw=3)
-        axe_legend.text(xpos+0.02, ypos-0.01, 'Lateral right', fontsize=fontsize_legend, va='center')
-        
-        xpos = 0.82
-        axe_legend.scatter([xpos], [ypos], c='red', marker='s', alpha=1, lw=3)
-        axe_legend.text(xpos+0.02, ypos-0.01, 'Prone', fontsize=fontsize_legend, va='center')
-        
-        xpos = 0.94
-        axe_legend.scatter([xpos], [ypos], c='gray', marker='s', alpha=1, lw=3)
-        axe_legend.text(xpos+0.02, ypos-0.01, 'Upright', fontsize=fontsize_legend, va='center')
-            
-    # Additional positions in the legend
-    axe_legend.set_xlim(0, 1)
-    axe_legend.set_ylim(0, 1)
-    axe_legend.axis('off')
 
-    ### Add some text with the main variables
-    
-    # sleep_metrics: DataFrame with the following columns:
-    # hours_sleep	hours_psg	sleep_efficiency	perc_r	perc_n1	perc_n2	perc_n3	waso	sleep_latency	r_latency	sfi	ahi	ahi_nrem	ahi_rem	rdi	oai	cai	mai	hyi	rerai	lmi	plmi	arousal_index
-    metric_labels = {
-        'hours_sleep': 'TST (h)',
-        'hours_psg': 'Recording (h)',
-        'sleep_efficiency': 'Eff (%)',
 
-        'perc_r': 'REM (%)',
-        'perc_n1': 'N1 (%)',
-        'perc_n2': 'N2 (%)',
 
-        'perc_n3': 'N3 (%)',
-        'waso': 'WASO (min)',
-        'sleep_latency': 'SL (min)',
 
-        'sfi': 'SFI',
-        'arousal_index': 'Arousal I.',
-        'lmi': 'LMI',
 
-        'ahi': 'AHI',
-        'ahi_nrem': 'AHI NREM',
-        'ahi_rem': 'AHI REM',
 
-        'rdi': 'RDI',
-        'oai': 'OAI',
-        'cai': 'CAI',
 
-        'mai': 'MAI',
-        'hyi': 'HYI',
-        'rerai': 'RERAI',
-    }
 
-    fontsize_statistics = 12  # Adjust as needed
-    line_height = 0.025  # Adjust line spacing
 
-    if sleep_metrics is not None:
-        for i, (key, label) in enumerate(metric_labels.items()):
-            value = sleep_metrics[key].item()
-            if '%' in label:
-                value *= 100
-            if key in ['hours_sleep', 'hours_psg', 'sfi']:
-                decimals = 1
-            else:
-                decimals = 0
-            value = np.round(value, decimals)
-            # Positioning text under the legend, adjust y-position as needed # make monospace font
-            fig.text(0.1 + 0.30 * (i % 3), 0.17 - line_height * (i // 3), 
-                        f"{label:<13} {value:.{decimals}f}",
-                        fontsize=fontsize_statistics, va='center', ha='left', family='monospace')
 
-    plt.tight_layout()
-    plt.subplots_adjust(hspace=0.05, bottom=0.32) 
 
-    return fig
+
+
+
+
+
 
 def generate_sleep_report(path_caisr_annotations, path_report_output=None, path_csv_metrics=None, path_signals_h5=None):
     """Generate a sleep report based on the combined output from different sleep analysis models.
@@ -653,7 +902,7 @@ if __name__ == "__main__":
     
     # Set up paths to CAISR's task outputs
     task_names = ['stage', 'arousal', 'resp', 'limb']
-    intermediate_folder = csv_folder + 'intermediate/'
+    intermediate_folder = os.path.join(csv_folder, 'intermediate')
     task_output_dirs = {task_name: os.path.join(intermediate_folder, task_name) for task_name in task_names}
     task_output_files = {}
     for task_name, task_dir in task_output_dirs.items():
