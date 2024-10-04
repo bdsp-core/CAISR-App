@@ -1,0 +1,63 @@
+# Components prefixed __CB are for keras callback hyperparamer settings
+
+
+build:
+  #
+  # Hyperparameters passed to the Model.build and __init__ methods
+  #
+  model_class_name: "USleep_EJ_do"
+  activation: elu
+  depth: 12
+  kernel_size: 9
+  dilation: 1
+  transition_window: 1
+  complexity_factor: 1.67
+  n_classes: 2 #Usleep EJ
+  n_classes_b1: 5 #U-sleep aux branch hypno
+  n_classes_b2: 2 #U-sleep aux branch arousal
+  n_channels: 5
+  l2_reg: Null
+  batch_shape: [32, 35, 3840, 5]
+  data_per_prediction: 64 #U-sleep EJ
+  data_per_prediction_b1: 3840 #U-sleep aux branch hypno
+  data_per_prediction_b2: 64 #U-sleep aux branch arousal
+
+
+data:
+  data_split: stanford_FSL1 #'70_15_15' # 8k_old_custom_split2 # [fold1,fold2,fold3,fold4] #8k
+  data_Hz: 128
+  label_type: arousal_rater_0 #arousal-platinum_converted_3 #arousal-shifted_converted_0 #  #arousal
+  label_Hz: 2
+  hypno_Hz: 30 #inverted
+  scaled: True
+  reference: False
+  stage_start: None
+  
+
+fit:
+  # Loss function
+  loss: [wc]
+  metrics: [dc,ar_acc,bg_acc] 
+  focal_weight: [1,10]
+
+  # Optimization
+  batch_size: 32
+  load_hypno: 10
+  load_arousal: 22 #if load_hypno + load_arousal < batchsize --> hard example mining will fill up the batch
+  n_batches_epoch: 60
+  n_epochs: 500
+  verbose: true
+  optimizer: "Adam"
+  optimizer_kwargs: {learning_rate: 5.0e-06, amsgrad: True, decay: 0.0, beta_1: 0.9, beta_2: 0.999, epsilon: 1.0e-8}
+  
+  
+channels: 
+  eeg: ['F3-M2', 'F4-M1', 'C3-M2', 'C4-M1', 'O1-M2', 'O2-M1', 'CZ-OZ']
+  eog: ['E1-M2', 'E2-M2','EOG']
+  variable_eeg: [['F3-M2','C3-M2','O1-M2','C4-M1'],['F4-M1','C4-M1','O2-M1','CZ-OZ']]
+  variable_emg: ['E1-M2', 'E2-M2']
+  fixed: ['CHIN1-CHIN2','CHIN','ECG']
+
+hard_example_mining: 
+  pred_path: '/media/erikjan/Seagate Expansion Drive/CAISER/u-sleep_2/predictions/U-Sleep_aux_Arousal_cc_wf_2hz_val_loss_2/mgh_v3/'
+
