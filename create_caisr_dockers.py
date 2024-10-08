@@ -147,7 +147,7 @@ def compress_and_save_docker(save_folder: str, task: str) -> None:
 if __name__ == '__main__':
     # TODO: select all tasks, you would like to create a Docker for. 
     tasks = ['preprocess', 'stage', 'arousal', 'resp', 'limb', 'report']
-
+    
     # Set folder where to save the compressed Docker images
     save_folder = os.path.join(os.getcwd(), 'dockers')
     os.makedirs(save_folder, exist_ok=True)
