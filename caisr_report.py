@@ -398,6 +398,8 @@ class SleepReportGenerator:
             ylim = 80
         else:
             ylim = spo2_q10.min()
+        if not np.isfinite(ylim):
+            ylim = 0
         self.ax[i].set_ylim([ylim, 100])
         self.ax[i].set_xlim(0, self.x_hours[-1])
         self.ax[i].set_ylabel('SpO2')
@@ -448,8 +450,10 @@ class SleepReportGenerator:
             label='HR 2.5-97.5%'
         )
 
-        hr_ylim_min = max(20, np.nanquantile(hr_values, 0.01))
-        hr_ylim_max = min(120, np.nanquantile(hr_values, 0.99))
+        q1 = np.nanquantile(hr_values, 0.01)
+        q99 = np.nanquantile(hr_values, 0.99)
+        hr_ylim_min = max(20, q1 if np.isfinite(q1) else 20)
+        hr_ylim_max = min(120, q99 if np.isfinite(q99) else 120)
         self.ax[row].set_ylim([hr_ylim_min, hr_ylim_max])
         self.ax[row].set_xlim([0, self.x_hours[-1]])
         self.ax[row].set_ylabel('HR')
