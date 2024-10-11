@@ -1,4 +1,4 @@
-data/*.edf
+data/raw/*.edf
 data/*.h5
 
 
