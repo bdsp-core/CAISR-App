@@ -241,6 +241,10 @@ You can optionally clean up Docker images and containers after running the tasks
 ## License
 This project is free to use for non-commercial purposes. For commercial use, please contact us directly.
 
+## DeepWiki AI Help for This Repo
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/bdsp-core/CAISR-App)
+
+
 ## Contact & Support
 For support or inquiries, please open an issue on GitHub. If you have any questions or need clarification, the CAISR development team can be contacted via:
 
