@@ -144,6 +144,11 @@ def save_prepared_data(path, signal):
    ```
 
 ### 5. **Run the Script**:
+
+![image](https://github.com/user-attachments/assets/f081e3ce-12f1-41a2-91c4-4e3a3e838749)
+
+
+
    - Execute the main script using Python:
      ```bash
      python caisr.py
@@ -248,10 +253,10 @@ This project is free to use for non-commercial purposes. For commercial use, ple
 ## Contact & Support
 For support or inquiries, please open an issue on GitHub. If you have any questions or need clarification, the CAISR development team can be contacted via:
 
-- Thijs-Enagnon Nassi, PhD
-- Wolfgang Ganglberger, PhD
-- Erik-Jan Meulenbrugge
 - Samaneh Nasiri, PhD
+- Wolfgang Ganglberger, PhD
+- Thijs-Enagnon Nassi, PhD
+- Erik-Jan Meulenbrugge
 - Haoqi Sun, PhD
 - Robert J Thomas, MD
 - M Brandon Westover, MD, PhD
