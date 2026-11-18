@@ -39,6 +39,9 @@ try:
 except ImportError:
     _load_edf_for_caisr = None
 
+# TS-Zarr loader (BDSP primary stores); needs `pip install bdsp`.
+from zarr_loader import is_zarr_input, load_raw_for_caisr
+
 
 def _load_breathing_signals_from_edf(
     path: str,
@@ -54,13 +57,13 @@ def _load_breathing_signals_from_edf(
     Loads the EDF, resamples each channel individually to ``original_fs``
     (200 Hz), then runs the identical post-load pipeline as the H5 loader.
     """
-    if _load_edf_for_caisr is None:
+    if _load_edf_for_caisr is None and not is_zarr_input(path):
         raise ImportError(
             "EDF input detected but `pyedflib` is not installed. "
             "Run `pip install pyedflib` inside the caisr_resp environment."
         )
     the_id = os.path.splitext(os.path.basename(path))[0]
-    channel_data, channel_fs = _load_edf_for_caisr(path)
+    channel_data, channel_fs = load_raw_for_caisr(path, _load_edf_for_caisr)
     if not channel_data:
         raise ValueError(f'No channels could be loaded from {path}.')
 
@@ -196,7 +199,7 @@ def load_breathing_signals_dispatch(
     verbose: int = 5,
 ) -> Tuple[pd.DataFrame, dict]:
     """Unified data_loader: dispatches on extension between H5 and EDF loaders."""
-    if path.lower().endswith('.edf'):
+    if path.lower().endswith('.edf') or is_zarr_input(path):
         return _load_breathing_signals_from_edf(
             path, csv_folder, add_CAISR=add_CAISR, verbose=verbose
         )
@@ -537,7 +540,8 @@ if __name__ == "__main__":
         
     input_files = sorted(
         glob.glob(os.path.join(args.input_data_dir, '*.h5')) +
-        glob.glob(os.path.join(args.input_data_dir, '*.edf'))
+        glob.glob(os.path.join(args.input_data_dir, '*.edf')) +
+        glob.glob(os.path.join(args.input_data_dir, '*.zarr'))
     )
     param_file = os.path.join(args.param_dir, 'resp.csv')
     

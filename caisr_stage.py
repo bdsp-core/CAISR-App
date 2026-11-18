@@ -63,6 +63,9 @@ try:
 except ImportError:
     _load_edf_for_caisr = None
 
+# TS-Zarr loader (BDSP primary stores); needs `pip install bdsp`.
+from zarr_loader import is_zarr_input, load_raw_for_caisr
+
 
 def _select_signals_cohort_edf(path: str):
     """EDF counterpart of utils_docker.select_signals_cohort for caisr_stage.
@@ -70,7 +73,7 @@ def _select_signals_cohort_edf(path: str):
     Returns the same ``(sigs, new_Fs, channels, length_at_200Hz)`` tuple as
     the H5 loader, so ``process_single_file`` is format-agnostic.
     """
-    if _load_edf_for_caisr is None:
+    if _load_edf_for_caisr is None and not is_zarr_input(path):
         raise ImportError(
             "EDF input detected but `pyedflib` is not installed. "
             "Run `pip install pyedflib` inside the caisr_stage environment."
@@ -80,7 +83,7 @@ def _select_signals_cohort_edf(path: str):
     period_length_sec = 0.5
     fs_output_ref = 200
 
-    channel_data, channel_fs = _load_edf_for_caisr(path)
+    channel_data, channel_fs = load_raw_for_caisr(path, _load_edf_for_caisr)
 
     eeg = ['c3-m2', 'c4-m1']
     common_sigs = ['e1-m2', 'chin1-chin2', 'abd', 'chest', 'ecg']
@@ -130,7 +133,7 @@ def _select_signals_cohort_edf(path: str):
 
 def select_signals_cohort(path: str):
     """Unified dispatcher: load + pre-process from either .h5 or .edf."""
-    if path.lower().endswith('.edf'):
+    if path.lower().endswith('.edf') or is_zarr_input(path):
         return _select_signals_cohort_edf(path)
     return _select_signals_cohort_h5(path)
 
@@ -364,7 +367,8 @@ if __name__ == "__main__":
 
     input_files = sorted(
         glob.glob(os.path.join(args.input_data_dir, '*.h5')) +
-        glob.glob(os.path.join(args.input_data_dir, '*.edf'))
+        glob.glob(os.path.join(args.input_data_dir, '*.edf')) +
+        glob.glob(os.path.join(args.input_data_dir, '*.zarr'))
     )
     
     # Load parameters

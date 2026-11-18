@@ -168,6 +168,25 @@ Each of the four CAISR modules (`caisr_stage.py`, `caisr_arousal.py`, `caisr_res
 
 The downstream model, post-processing, and CSV output format are identical regardless of input format.
 
+### TS-Zarr input (BDSP primary stores, untested)
+
+The native scripts also accept BDSP primary TS-Zarr stores
+(`<subject>_<session>_task-psg_eeg.zarr` directories, the BDSP default
+recording format) in the same input directory as `.h5` and `.edf` files. A
+store is read like a raw EDF: `zarr_loader.load_zarr_for_caisr` returns the
+same channel dictionary as `load_edf_for_caisr` (lower-case labels, voltage
+channels in volts, names standardized with `channel_table.csv`, the same
+bipolar derivations), and each module then resamples and prepares it exactly
+as for EDF input.
+
+This needs the shared BDSP reader in each task environment:
+`pip install bdsp` (Python 3.11 or newer; it installs `zarr`). The Docker
+images and the `caisr_preprocess.py` H5 preparation are unchanged.
+
+Status: implemented and syntax-checked, and its signal reader was checked on a
+synthetic store, but it has not been validated end to end against the CAISR
+models. Compare its outputs with the EDF or H5 path before relying on it.
+
 ### 1. Create the Conda environments
 
 Each module has its own dependency set, so create one environment per task:
