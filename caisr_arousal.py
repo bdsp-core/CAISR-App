@@ -49,6 +49,9 @@ try:
 except ImportError:
     _load_edf_for_caisr = None
 
+# TS-Zarr loader (BDSP primary stores); needs `pip install bdsp`.
+from zarr_loader import is_zarr_input, load_raw_for_caisr
+
 
 def _load_arousal_edf_as_sig_group(file: str, target_fs: int = 200) -> dict:
     """Read an .edf file and return a {channel_name: 1D ndarray} dict at *target_fs*.
@@ -59,12 +62,12 @@ def _load_arousal_edf_as_sig_group(file: str, target_fs: int = 200) -> dict:
     filtering. Channel renaming / bipolar derivations are handled by
     ``edf_loader.load_edf_for_caisr`` using ``channel_table.csv``.
     """
-    if _load_edf_for_caisr is None:
+    if _load_edf_for_caisr is None and not is_zarr_input(file):
         raise ImportError(
             "EDF input detected but `edfio` is not installed. "
             "Run `pip install edfio` inside the caisr_arousal environment."
         )
-    channel_data, channel_fs = _load_edf_for_caisr(file)
+    channel_data, channel_fs = load_raw_for_caisr(file, _load_edf_for_caisr)
     sig_group: dict = {}
     for ch, sig in channel_data.items():
         sig = np.asarray(sig, dtype=np.float64)
@@ -637,7 +640,7 @@ def pre_process_temporal_scaling(
 
     # --- Load raw signals (H5 or EDF, auto-detected) ---
     _unit_attr = None
-    if file.lower().endswith('.edf'):
+    if file.lower().endswith('.edf') or is_zarr_input(file):
         sig_group = _load_arousal_edf_as_sig_group(file, target_fs=200)
     else:
         with h5.File(file, "r") as f:
@@ -1127,7 +1130,8 @@ if __name__ == "__main__":
 
         input_files = sorted(
             glob(os.path.join(args.input_data_dir, "*.h5")) +
-            glob(os.path.join(args.input_data_dir, "*.edf"))
+            glob(os.path.join(args.input_data_dir, "*.edf")) +
+            glob(os.path.join(args.input_data_dir, "*.zarr"))
         )
         overwrite, multiprocess = extract_run_parameters(
             os.path.join(args.param_dir, "arousal.csv")

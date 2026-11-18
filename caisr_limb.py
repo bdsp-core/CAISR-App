@@ -69,6 +69,9 @@ try:
 except ImportError:
     _load_edf_for_caisr = None  # surface a clear error only if EDF input is fed in
 
+# TS-Zarr loader (BDSP primary stores); needs `pip install bdsp`.
+from zarr_loader import is_zarr_input, load_raw_for_caisr
+
 
 def _select_signals_cohort_edf(path: str, intermediate_fs: int = 200) -> Tuple[np.ndarray, int]:
     """EDF counterpart of utils_docker.select_signals_cohort for caisr_limb.
@@ -77,13 +80,13 @@ def _select_signals_cohort_edf(path: str, intermediate_fs: int = 200) -> Tuple[n
     ``intermediate_fs`` (default 200 Hz, matching the H5 path), and stacks
     them into the (n_samples, 2) array the downstream limb pipeline expects.
     """
-    if _load_edf_for_caisr is None:
+    if _load_edf_for_caisr is None and not is_zarr_input(path):
         raise ImportError(
             "EDF input detected but `pyedflib` is not installed. "
             "Run `pip install pyedflib` inside the caisr_limb environment."
         )
     the_id = os.path.splitext(os.path.basename(path))[0]
-    channel_data, channel_fs = _load_edf_for_caisr(path)
+    channel_data, channel_fs = load_raw_for_caisr(path, _load_edf_for_caisr)
 
     REQUIRED = ['lat', 'rat']
     missing = [ch for ch in REQUIRED if ch not in channel_data]
@@ -109,7 +112,7 @@ def _select_signals_cohort_edf(path: str, intermediate_fs: int = 200) -> Tuple[n
 
 def select_signals_cohort(path: str):
     """Unified dispatcher: load limb EMG signals from either an .h5 or .edf file."""
-    if path.lower().endswith('.edf'):
+    if path.lower().endswith('.edf') or is_zarr_input(path):
         return _select_signals_cohort_edf(path)
     return _select_signals_cohort_h5(path)
 
@@ -343,7 +346,8 @@ if __name__ == "__main__":
 
     input_files = sorted(
         glob.glob(os.path.join(args.input_data_dir, '*.h5')) +
-        glob.glob(os.path.join(args.input_data_dir, '*.edf'))
+        glob.glob(os.path.join(args.input_data_dir, '*.edf')) +
+        glob.glob(os.path.join(args.input_data_dir, '*.zarr'))
     )
 
     param_file = os.path.join(args.param_dir, 'limb.csv')
